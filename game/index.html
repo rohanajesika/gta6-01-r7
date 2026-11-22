@@ -3,16 +3,91 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Block Dodger</title>
+<title>Solmar Bay — Open-World Crime</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #11141b; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1410; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
   #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-  /* Read aloud, never shown: the status line screen readers announce. */
+  .hidden { display: none !important; }
+  #hud { position: fixed; inset: 0; pointer-events: none; color: #f5efe4; z-index: 5; }
+  #hud-top-left { position: absolute; top: 14px; left: 16px; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+  #hud-cash { font-size: 30px; font-weight: 800; color: #7dd87d; }
+  #hud-health { width: 180px; height: 10px; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.4); margin-top: 6px; }
+  #hud-health-fill { height: 100%; width: 100%; background: #4caf6d; }
+  #hud-stars { font-size: 26px; letter-spacing: 4px; color: #888; margin-top: 4px; }
+  #hud-stars.hot { color: #ffd94c; }
+  #hud-mission { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); text-align: center; text-shadow: 0 1px 3px rgba(0,0,0,.85); max-width: 560px; }
+  #hud-mission-title { font-size: 20px; font-weight: 800; color: #f2c94c; }
+  #hud-mission-text { font-size: 15px; margin-top: 2px; }
+  #hud-district { position: absolute; top: 14px; right: 16px; font-size: 18px; font-weight: 700; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+  #hud-ammo { position: absolute; bottom: 64px; left: 16px; font-size: 16px; font-weight: 700; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+  #hud-speed { position: absolute; bottom: 64px; right: 210px; font-size: 22px; font-weight: 800; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+  #hud-hint { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); font-size: 13px; color: #e8ddc4; text-shadow: 0 1px 3px rgba(0,0,0,.9); white-space: nowrap; }
+  #minimap { position: absolute; right: 14px; bottom: 14px; width: 180px; height: 180px; border: 2px solid rgba(255,255,255,.55); background: #20242e; }
+  #hud-message { position: absolute; top: 96px; left: 50%; transform: translateX(-50%); font-size: 19px; font-weight: 700; color: #ffe9a8; text-shadow: 0 1px 4px rgba(0,0,0,.9); text-align: center; max-width: 640px; }
+  #crosshair { position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; }
+  #crosshair:before, #crosshair:after { content: ""; position: absolute; background: rgba(255,255,255,.9); }
+  #crosshair:before { left: 6px; top: 0; width: 2px; height: 14px; }
+  #crosshair:after { left: 0; top: 6px; width: 14px; height: 2px; }
+  .panel { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(20, 12, 8, 0.72); z-index: 10; color: #f5efe4; }
+  .panel-inner { text-align: center; max-width: 640px; padding: 32px; }
+  .panel-inner h1 { font-size: 52px; margin: 0 0 6px; color: #ff9e57; letter-spacing: 2px; }
+  .panel-inner h2 { font-size: 30px; margin: 0 0 12px; color: #f2c94c; }
+  .panel-inner p { font-size: 16px; line-height: 1.55; color: #e8ddc4; }
+  .panel-inner button { pointer-events: auto; display: block; margin: 10px auto; padding: 12px 34px; font-size: 17px; font-weight: 700; color: #1a1410; background: #f2c94c; border: none; cursor: pointer; min-width: 260px; }
+  .panel-inner button.secondary { background: #d8cfba; }
+  .panel-inner button:hover { filter: brightness(1.1); }
   #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 </style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.min.js" } }
+</script>
 </head>
 <body>
-<canvas id="game" aria-label="Block Dodger: move the paddle left and right to dodge falling blocks and catch coins"></canvas>
+<canvas id="game" aria-label="Solmar Bay: an open-world crime game. Walk with W A S D, drive with W A S D, E to enter a car, click to shoot, F to punch."></canvas>
+<div id="hud" class="hidden">
+  <div id="hud-top-left">
+    <div id="hud-cash">$120</div>
+    <div id="hud-health"><div id="hud-health-fill"></div></div>
+    <div id="hud-stars">&#9734;&#9734;&#9734;&#9734;&#9734;</div>
+  </div>
+  <div id="hud-mission">
+    <div id="hud-mission-title">Mission 1 — Sunset Delivery</div>
+    <div id="hud-mission-text"></div>
+  </div>
+  <div id="hud-district">Downtown</div>
+  <div id="hud-ammo">Ammo 24</div>
+  <div id="hud-speed"></div>
+  <div id="hud-hint">WASD move / drive &middot; E enter car &middot; Click shoot &middot; F punch &middot; R reload &middot; Shift run &middot; P pause &middot; drag mouse to look</div>
+  <canvas id="minimap" width="180" height="180"></canvas>
+  <div id="hud-message" class="hidden"></div>
+  <div id="crosshair"></div>
+</div>
+<div id="start-screen" class="panel">
+  <div class="panel-inner">
+    <h1>SOLMAR BAY</h1>
+    <h2>An open-world crime story</h2>
+    <p>You are Rico Marlin, a courier fresh off the bus in Solmar Bay — a sun-soaked coastal city of five districts, from the Marina to the Port. Madame Vela has three jobs for you: a sunset delivery, a stolen Sunset GT, and a getaway with the whole police force on your tail. Walk it, drive it, steal it — just don't get busted.</p>
+    <p>WASD to move and drive &middot; E to enter a car &middot; Click to shoot &middot; F to punch &middot; R to reload &middot; P to pause. Your progress autosaves after every job.</p>
+    <button id="btn-start">Start the story</button>
+    <button id="btn-continue" class="secondary hidden">Continue — load save</button>
+  </div>
+</div>
+<div id="pause-menu" class="panel hidden">
+  <div class="panel-inner">
+    <h2>Paused</h2>
+    <p>The city waits for no one — except right now.</p>
+    <button id="btn-resume">Resume</button>
+    <button id="btn-save" class="secondary">Save progress</button>
+    <button id="btn-restart" class="secondary">Restart from the beginning</button>
+  </div>
+</div>
+<div id="game-over" class="panel hidden">
+  <div class="panel-inner">
+    <h2 id="game-over-title">WASTED</h2>
+    <p id="game-over-text"></p>
+    <button id="btn-retry">Try again</button>
+  </div>
+</div>
 <p id="status" role="status" aria-live="polite"></p>
 <script type="module" src="./src/main.js"></script>
 </body>
