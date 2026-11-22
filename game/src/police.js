@@ -1,124 +1,232 @@
-// The police response to the wanted level. Patrol cars spawn on the roads
-// near the player, chase with lights flashing, ram the player's car and, on
-// foot, close in until the player is busted. No police spawn while wanted
-// is zero; when the heat dies down they drive off and despawn.
+// Solmar Bay police: patrol cars that cruise the road grid while the city
+// is calm, then chase, ram and corner the player as the wanted level
+// climbs. A car is either patrolling (following the grid, turning at
+// intersections like traffic) or chasing (steering toward the player and
+// driving faster the hotter the wanted level is). Cornered on foot at a
+// high wanted level, the player gets busted.
 
 import * as THREE from 'three';
 import { CITY, MAX_POLICE_CARS, WANTED } from './config.js';
+import { range } from './random.js';
 import { makeCarMesh } from './vehicles.js';
-import { nearestRoadPoint } from './world.js';
+import { isOnRoad, nearestRoadPoint } from './world.js';
 
-export function createPolice(scene, random) {
+const PATROL_BLUE = 0x3b6fd4;
+const PATROL_COUNT = 2;
+
+function buildPatrolCar(scene, x, z, heading) {
+  const built = makeCarMesh(PATROL_BLUE, false);
+  // Roof light bar: a red lamp on one side, blue on the other.
+  const barBase = new THREE.Mesh(
+    new THREE.BoxGeometry(1.5, 0.18, 0.5),
+    new THREE.MeshLambertMaterial({ color: 0x22242a }),
+  );
+  barBase.position.set(0, 1.58, 0.1);
+  built.group.add(barBase);
+  const redLamp = new THREE.Mesh(
+    new THREE.BoxGeometry(0.6, 0.22, 0.42),
+    new THREE.MeshBasicMaterial({ color: 0xff2a2a }),
+  );
+  redLamp.position.set(-0.38, 1.7, 0.1);
+  built.group.add(redLamp);
+  const blueLamp = new THREE.Mesh(
+    new THREE.BoxGeometry(0.6, 0.22, 0.42),
+    new THREE.MeshBasicMaterial({ color: 0x2a6bff }),
+  );
+  blueLamp.position.set(0.38, 1.7, 0.1);
+  built.group.add(blueLamp);
+  built.group.position.set(x, 0, z);
+  built.group.rotation.y = heading;
+  scene.add(built.group);
+  return {
+    x, z, heading, speed: 0,
+    mesh: built.group, wheels: built.wheels,
+    redLamp, blueLamp,
+    patrolSpeed: 9, patrolTurnAt: 0,
+  };
+}
+
+function turnToward(current, target, maxTurn) {
+  let diff = target - current;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  if (diff > maxTurn) return current + maxTurn;
+  if (diff < -maxTurn) return current - maxTurn;
+  return target;
+}
+
+export function createPolice(scene, random, colliders) {
   const cars = [];
-  let spawnTimer = 0;
-  let bustTimer = 0;
-
-  function spawn(x, z, heading) {
-    const mesh = makeCarMesh(0x1c1f26, false);
-    mesh.group.position.set(x, 0, z);
-    scene.add(mesh.group);
-    // Light bar: two flashing boxes on the roof.
-    const barMat = new THREE.MeshBasicMaterial({ color: 0x3b6fd4 });
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.18, 0.5), barMat);
-    bar.position.set(0, 1.6, 0);
-    mesh.group.add(bar);
-    const bar2 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.18, 0.5), new THREE.MeshBasicMaterial({ color: 0xe5534b }));
-    bar2.position.set(0.75, 1.6, 0);
-    mesh.group.add(bar2);
-    const car = { x, z, heading, speed: 0, mesh: mesh.group, bar, bar2, wheels: mesh.wheels, siren: random() * 10 };
-    cars.push(car);
-    return car;
-  }
-
-  function update(dt, player, wanted, onBusted, onRam) {
-    spawnTimer -= dt;
-    const targetCount = wanted === 0 ? 0 : Math.min(MAX_POLICE_CARS, wanted);
-    if (wanted > 0 && cars.length < targetCount && spawnTimer <= 0) {
-      spawnTimer = WANTED.policeSpawnDelay;
-      const angle = random() * Math.PI * 2;
-      const spot = nearestRoadPoint(player.x + Math.cos(angle) * 70, player.z + Math.sin(angle) * 70);
-      spawn(spot.x, spot.z, Math.atan2(-(player.x - spot.x), -(player.z - spot.z)));
-    }
-    const now = performance.now() / 1000;
-    for (let i = cars.length - 1; i >= 0; i -= 1) {
-      const car = cars[i];
-      if (wanted === 0) {
-        // Drive off: head away from the player and despawn at distance.
-        const away = Math.atan2(-(player.x - car.x), -(player.z - car.z)) + Math.PI;
-        car.heading = away;
-        car.speed = Math.min(car.speed + 8 * dt, 16);
-        car.x += -Math.sin(car.heading) * car.speed * dt;
-        car.z += -Math.cos(car.heading) * car.speed * dt;
-        if (Math.hypot(car.x - player.x, car.z - player.z) > 180) {
-          scene.remove(car.mesh);
-          cars.splice(i, 1);
-        }
-      } else {
-        const dx = player.x - car.x;
-        const dz = player.z - car.z;
-        const dist = Math.hypot(dx, dz);
-        const wantHeading = Math.atan2(-dx, -dz);
-        let diff = wantHeading - car.heading;
-        while (diff > Math.PI) diff -= Math.PI * 2;
-        while (diff < -Math.PI) diff += Math.PI * 2;
-        car.heading += Math.max(-2.4 * dt, Math.min(2.4 * dt, diff));
-        const topSpeed = 30 + wanted * 2;
-        car.speed = Math.min(car.speed + 14 * dt, topSpeed);
-        car.x += -Math.sin(car.heading) * car.speed * dt;
-        car.z += -Math.cos(car.heading) * car.speed * dt;
-        if (dist < 3.2) {
-          car.speed *= 0.5;
-          if (onRam) onRam(car, dist);
-        }
-        // On foot and cornered: the bust timer runs.
-        if (!player.inCar && dist < WANTED.bustRange && Math.abs(player.speed || 0) < 3) {
-          bustTimer += dt;
-          if (bustTimer >= WANTED.bustSeconds && onBusted) onBusted();
-        } else {
-          bustTimer = Math.max(0, bustTimer - dt * 2);
-        }
-      }
-      car.mesh.position.set(car.x, 0, car.z);
-      car.mesh.rotation.y = car.heading;
-      const flash = Math.sin(now * 9 + car.siren) > 0;
-      car.bar.material.color.setHex(flash ? 0x3b6fd4 : 0xe5534b);
-      car.bar2.material.color.setHex(flash ? 0xe5534b : 0x3b6fd4);
-      for (const wheel of car.wheels) wheel.rotation.x += car.speed * dt * 2;
-    }
-    return bustTimer;
-  }
-
-  function nearestDistance(player) {
-    let best = Infinity;
-    for (const car of cars) best = Math.min(best, Math.hypot(car.x - player.x, car.z - player.z));
-    return best;
-  }
-
-  function forceSpawn(count) {
-    for (let i = 0; i < count; i += 1) {
-      const angle = (i / Math.max(1, count)) * Math.PI * 2 + 0.6;
-      const spot = nearestRoadPoint(
-        (typeof playerX === 'number' ? playerX : 0) + Math.cos(angle) * 45,
-        (typeof playerZ === 'number' ? playerZ : 0) + Math.sin(angle) * 45,
-      );
-      spawn(spot.x, spot.z, 0);
-    }
-  }
-
-  // forceSpawn needs the player's position: the caller sets it first.
   let playerX = 0;
-  let playerZ = 0;
+  let playerZ = 20;
+  let bustLeft = WANTED.bustSeconds;
+  let spawnCooldown = 0;
+  let flashTime = 0;
+
   function setPlayerPosition(x, z) {
     playerX = x;
     playerZ = z;
   }
 
-  // Spawn one patrol car at an exact spot, facing the player: used to stage
-  // the chase screenshot with the police visible ahead of the player's car.
-  function spawnAt(x, z, targetX, targetZ) {
+  function spawn(x, z, targetX, targetZ) {
     const heading = Math.atan2(-(targetX - x), -(targetZ - z));
-    return spawn(x, z, heading);
+    if (cars.length >= MAX_POLICE_CARS) {
+      // Full force: move the car furthest from the new spot instead.
+      let far = cars[0];
+      let farD = -1;
+      for (const car of cars) {
+        const d = Math.hypot(car.x - x, car.z - z);
+        if (d > farD) {
+          farD = d;
+          far = car;
+        }
+      }
+      far.x = x;
+      far.z = z;
+      far.heading = heading;
+      far.speed = 0;
+      far.mesh.position.set(x, 0, z);
+      far.mesh.rotation.y = heading;
+      return far;
+    }
+    const car = buildPatrolCar(scene, x, z, heading);
+    cars.push(car);
+    return car;
   }
 
-  return { cars, update, nearestDistance, forceSpawn, setPlayerPosition, spawnAt };
+  function spawnNearPlayer() {
+    // Appear on a road some distance from the player, never on top of them.
+    const angle = random() * Math.PI * 2;
+    const distance = range(random, 70, 110);
+    const spot = nearestRoadPoint(
+      playerX + Math.cos(angle) * distance,
+      playerZ + Math.sin(angle) * distance,
+    );
+    return spawn(spot.x, spot.z, playerX, playerZ);
+  }
+
+  function dropCar(car) {
+    scene.remove(car.mesh);
+    const index = cars.indexOf(car);
+    if (index >= 0) cars.splice(index, 1);
+  }
+
+  function hitsBuilding(x, z, radius) {
+    if (!colliders) return false;
+    for (const c of colliders) {
+      if (Math.abs(x - c.x) < c.hx + radius && Math.abs(z - c.z) < c.hz + radius) return true;
+    }
+    return false;
+  }
+
+  function rollForward(car, dt) {
+    // Move along the heading, staying on the road grid: if the straight
+    // step would leave the road, slide along one axis instead, and if
+    // neither axis works, turn away at the next intersection.
+    const fx = -Math.sin(car.heading);
+    const fz = -Math.cos(car.heading);
+    const step = car.speed * dt;
+    const nx = car.x + fx * step;
+    const nz = car.z + fz * step;
+    if (!hitsBuilding(nx, nz, 1.6) && isOnRoad(nx, nz)) {
+      car.x = nx;
+      car.z = nz;
+      return;
+    }
+    if (!hitsBuilding(nx, car.z, 1.6) && isOnRoad(nx, car.z)) {
+      car.x = nx;
+      return;
+    }
+    if (!hitsBuilding(car.x, nz, 1.6) && isOnRoad(car.x, nz)) {
+      car.z = nz;
+      return;
+    }
+    car.heading += Math.PI / 2;
+  }
+
+  function update(dt, player, wanted, onBusted, onRam) {
+    flashTime += dt;
+    const chasing = wanted > 0;
+    const wantedCount = chasing
+      ? Math.min(MAX_POLICE_CARS, 1 + wanted)
+      : PATROL_COUNT;
+
+    spawnCooldown -= dt;
+    if (cars.length < wantedCount && spawnCooldown <= 0) {
+      spawnNearPlayer();
+      spawnCooldown = WANTED.policeSpawnDelay;
+    }
+    while (cars.length > wantedCount) {
+      let far = cars[0];
+      let farD = -1;
+      for (const car of cars) {
+        const d = Math.hypot(car.x - playerX, car.z - playerZ);
+        if (d > farD) {
+          farD = d;
+          far = car;
+        }
+      }
+      dropCar(far);
+    }
+
+    const topSpeed = chasing ? 16 + wanted * 4 : 12;
+    for (const car of cars) {
+      if (chasing) {
+        const targetHeading = Math.atan2(-(player.x - car.x), -(player.z - car.z));
+        car.heading = turnToward(car.heading, targetHeading, 3.0 * dt);
+        car.speed += Math.max(-20 * dt, Math.min(14 * dt, topSpeed - car.speed));
+      } else {
+        // Patrol: cruise the grid, turning at intersections now and then.
+        const onGridX = Math.abs(car.x - Math.round(car.x / CITY.roadStep) * CITY.roadStep) < 2;
+        const onGridZ = Math.abs(car.z - Math.round(car.z / CITY.roadStep) * CITY.roadStep) < 2;
+        if (onGridX && onGridZ && car.patrolTurnAt <= 0) {
+          const roll = random();
+          if (roll < 0.3) car.heading += Math.PI / 2;
+          else if (roll < 0.6) car.heading -= Math.PI / 2;
+          car.patrolTurnAt = 2;
+        }
+        car.patrolTurnAt -= dt;
+        car.speed += Math.max(-14 * dt, Math.min(10 * dt, car.patrolSpeed - car.speed));
+      }
+      rollForward(car, dt);
+      car.mesh.position.set(car.x, 0, car.z);
+      car.mesh.rotation.y = car.heading;
+      for (const wheel of car.wheels) wheel.rotation.x += car.speed * dt * 2;
+      // Alternate the roof lamps so the bar flashes red, then blue.
+      const redOn = Math.floor(flashTime * 4) % 2 === 0;
+      car.redLamp.material.color.setHex(redOn ? 0xff2a2a : 0x551111);
+      car.blueLamp.material.color.setHex(redOn ? 0x112255 : 0x2a6bff);
+      // A chase car that reaches the player rams them.
+      if (chasing && Math.hypot(car.x - player.x, car.z - player.z) < 3.6) {
+        if (onRam) onRam(car);
+      }
+    }
+
+    // Busted: at a high wanted level, slow and cornered means caught.
+    let nearest = Infinity;
+    for (const car of cars) {
+      nearest = Math.min(nearest, Math.hypot(car.x - player.x, car.z - player.z));
+    }
+    const cornered = wanted >= 3 && nearest < WANTED.bustRange && Math.abs(player.speed || 0) < 4;
+    if (cornered) {
+      bustLeft -= dt;
+      if (bustLeft <= 0) {
+        bustLeft = WANTED.bustSeconds;
+        if (onBusted) onBusted();
+      }
+    } else {
+      bustLeft = WANTED.bustSeconds;
+    }
+    return bustLeft;
+  }
+
+  function nearestDistance(player) {
+    let best = Infinity;
+    for (const car of cars) {
+      best = Math.min(best, Math.hypot(car.x - player.x, car.z - player.z));
+    }
+    return best;
+  }
+
+  return { cars, setPlayerPosition, update, nearestDistance, spawn };
 }

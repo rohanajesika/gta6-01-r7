@@ -1,54 +1,68 @@
-// The screenshot scenes behind ?shot=cover|city|chase|mission. Each one
-// plays the real game forward from a fresh start for a fixed number of
-// steps with scripted inputs, so the frame is what a short game really
-// looks like and the same seed always gives the same frame.
+// Deterministic screenshot scenes for Solmar Bay. Each scene starts the
+// story fresh (no save), puts the player and the camera somewhere that
+// shows one side of the game, and uses only fixed coordinates, so the same
+// seed always stages the same picture: cover on foot in the city, city
+// driving the orange Sunset GT down a Downtown avenue, chase fleeing the
+// police at four wanted stars, mission standing by the first job's golden
+// beacon in the Marina.
 
-import { STEP } from './config.js';
+function putOnFoot(game, x, z, heading) {
+  game.teleportPlayer(x, z, heading);
+  game.setCameraDistance(10);
+}
 
-const IDLE_INPUT = { forward: 0, strafe: 0, run: false, actions: 0 };
-
-function runSteps(game, seconds, input) {
-  const steps = Math.round(seconds / STEP);
-  for (let i = 0; i < steps; i += 1) game.step(STEP, input || IDLE_INPUT);
+function putInCar(game, car, speed) {
+  // Take a car directly, without the street-crime fanfare: screenshot
+  // staging is not play, so no wanted message pops up over the picture.
+  // Teleport on foot first so the camera swings in behind the car's heading.
+  if (game.player.inCar) game.exitCar();
+  game.teleportPlayer(car.x, car.z, car.heading);
+  const player = game.player;
+  car.parked = false;
+  car.speed = speed;
+  car.mesh.position.set(car.x, 0, car.z);
+  car.mesh.rotation.y = car.heading;
+  player.x = car.x;
+  player.z = car.z;
+  player.heading = car.heading;
+  player.speed = speed;
+  player.inCar = true;
+  player.car = car;
+  player.mesh.visible = false;
+  player.mesh.position.set(car.x, 0, car.z);
 }
 
 export function stageShot(name, game) {
-  game.startGame();
+  game.startGame(false);
   if (name === 'city') {
-    // Rico driving the Sunset GT down the Downtown avenue, police trailing.
-    game.setCameraDistance(8);
-    game.teleportToCar(game.vehicles.sunsetGt);
-    game.enterCar();
-    runSteps(game, 1, { forward: 1, strafe: 0, run: false, actions: 0 });
-    runSteps(game, 2.5, { forward: 1, strafe: 0, run: false, actions: 0 });
-    return;
+    // The orange Sunset GT, fast down the Downtown avenue.
+    const gt = game.vehicles.sunsetGt;
+    putInCar(game, gt, 28);
+    game.wanted = 0;
+    game.setCameraDistance(12);
+  } else if (name === 'chase') {
+    // A stolen sedan, four wanted stars, two patrol cars coming head-on.
+    // Park it on the avenue first, so the camera swings in behind it.
+    const sedan = game.vehicles.parked[0];
+    sedan.x = 0;
+    sedan.z = 20;
+    sedan.heading = 0;
+    sedan.mesh.position.set(0, 0, 20);
+    sedan.mesh.rotation.y = 0;
+    putInCar(game, sedan, 24);
+    game.wanted = 4;
+    game.police.setPlayerPosition(0, 20);
+    const first = game.police.spawn(0, -48, 0, 20);
+    first.speed = 22;
+    const second = game.police.spawn(7, -68, 0, 20);
+    second.speed = 22;
+    game.setCameraDistance(12);
+  } else if (name === 'mission') {
+    // On foot by the Marina kiosk, the golden beacon of job one ahead,
+    // close enough that the HUD reads its distance.
+    putOnFoot(game, -168, -168, Math.PI / 4);
+  } else {
+    // Cover: Rico on foot on the avenue, the whole city behind him.
+    putOnFoot(game, 0, 20, 0);
   }
-  if (name === 'chase') {
-    // Four stars, two patrol cars closing in head-on on Rico's stolen car.
-    game.setCameraDistance(9);
-    const bright = [0xc23b2e, 0x2e5fa3, 0xd8a13c, 0xe8e0cc, 0x2e8b6a];
-    const stolen = game.vehicles.cars.find((c) => !c.parked && bright.includes(c.color)) || game.vehicles.cars[0];
-    game.teleportToCar(stolen);
-    game.enterCar();
-    game.addCrime(3, 'Stolen car spotted');
-    runSteps(game, 0.5, IDLE_INPUT);
-    const fx = -Math.sin(stolen.heading);
-    const fz = -Math.cos(stolen.heading);
-    game.police.spawnAt(stolen.x + fx * 55, stolen.z + fz * 55, stolen.x, stolen.z);
-    game.police.spawnAt(stolen.x + fx * 42 - fz * 6, stolen.z + fz * 42 + fx * 6, stolen.x, stolen.z);
-    runSteps(game, 2, { forward: 1, strafe: 0, run: false, actions: 0 });
-    runSteps(game, 1.2, IDLE_INPUT);
-    return;
-  }
-  if (name === 'mission') {
-    // Mission 1 in progress: Rico on foot near the Marina kiosk marker.
-    game.setCameraDistance(9);
-    game.teleportPlayer(-180, -156, 0);
-    runSteps(game, 6, IDLE_INPUT);
-    return;
-  }
-  // cover: Rico on foot at the Downtown plaza, city and HUD in view.
-  game.setCameraDistance(8);
-  game.teleportPlayer(0, 60, Math.PI);
-  runSteps(game, 8, IDLE_INPUT);
 }
